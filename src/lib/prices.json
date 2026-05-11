@@ -1,0 +1,149 @@
+{
+  "gramPrice": 7989,
+  "bars": [
+    {
+      "id": "1",
+      "label": "سبيكة 1 جرام",
+      "grams": 1,
+      "karat": 24,
+      "maxQty": 5,
+      "fees": {
+        "MB": 235,
+        "GE": 161,
+        "BTC": 185
+      }
+    },
+    {
+      "id": "2",
+      "label": "سبيكة 2.5 جرام",
+      "grams": 2.5,
+      "karat": 24,
+      "maxQty": 5,
+      "fees": {
+        "MB": 109,
+        "GE": 96,
+        "BTC": 110
+      }
+    },
+    {
+      "id": "3",
+      "label": "سبيكة 5 جرام",
+      "grams": 5,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 70,
+        "GE": 66,
+        "BTC": 85
+      }
+    },
+    {
+      "id": "4",
+      "label": "سبيكة 10 جرام",
+      "grams": 10,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 68,
+        "GE": 65,
+        "BTC": 82
+      }
+    },
+    {
+      "id": "5",
+      "label": "سبيكة 20 جرام",
+      "grams": 20,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 65,
+        "GE": 64,
+        "BTC": 80
+      }
+    },
+    {
+      "id": "6",
+      "label": "سبيكة 31.1 جرام",
+      "grams": 31.1,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 64,
+        "GE": 63,
+        "BTC": 79
+      }
+    },
+    {
+      "id": "7",
+      "label": "سبيكة 50 جرام",
+      "grams": 50,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 62,
+        "GE": 61,
+        "BTC": 77
+      }
+    },
+    {
+      "id": "8",
+      "label": "سبيكة 100 جرام",
+      "grams": 100,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 60,
+        "GE": 60,
+        "BTC": 75
+      }
+    },
+    {
+      "id": "9",
+      "label": "سبيكة 250 جرام",
+      "grams": 250,
+      "karat": 24,
+      "maxQty": 20,
+      "fees": {
+        "MB": 34,
+        "GE": 34,
+        "BTC": 35
+      }
+    },
+    {
+      "id": "10",
+      "label": "ربع جنيه",
+      "grams": 2,
+      "karat": 21,
+      "maxQty": 5,
+      "fees": {
+        "MB": 70,
+        "GE": 63,
+        "BTC": 85
+      }
+    },
+    {
+      "id": "11",
+      "label": "نصف جنيه",
+      "grams": 4,
+      "karat": 21,
+      "maxQty": 20,
+      "fees": {
+        "MB": 65,
+        "GE": 60,
+        "BTC": 80
+      }
+    },
+    {
+      "id": "12",
+      "label": "جنيه ذهب",
+      "grams": 8,
+      "karat": 21,
+      "maxQty": 20,
+      "fees": {
+        "MB": 47,
+        "GE": 55,
+        "BTC": 75
+      }
+    }
+  ]
+}
