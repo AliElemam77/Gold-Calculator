@@ -2,24 +2,24 @@
 
 import { useState, useEffect } from "react";
 
-type GoldBar = {
+type SKU = {
   id: string;
   label: string;
   grams: number;
   karat: number;
-  maxQty: number;
   fees: { MB: number; GE: number; BTC: number };
 };
 
 type PricesData = {
-  gramPrice: number;
-  bars: GoldBar[];
+  gramPrice24: number;
+  gramPrice21: number;
+  bars: SKU[];
 };
 
 export default function Dashboard() {
-  const [data, setData] = useState<PricesData | null>(null);
+  const [data, setData]       = useState<PricesData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving]   = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
@@ -48,8 +48,6 @@ export default function Dashboard() {
     }
   };
 
-  const updateGramPrice = (v: string) => data && setData({ ...data, gramPrice: Number(v) });
-
   const updateFee = (id: string, vendor: "MB" | "GE" | "BTC", v: string) => {
     if (!data) return;
     setData({
@@ -72,11 +70,10 @@ export default function Dashboard() {
 
   return (
     <div className="animate-fade-in" style={{ maxWidth: 1000, margin: "0 auto" }}>
-      {/* Page header */}
       <div className="page-hero">
         <h1>لوحة التحكم</h1>
         <p className="subtitle">
-          أدِر أسعار السبائك ومصنعيات الشركات — يُحسَب السعر النهائي تلقائياً ويُعرض في الحاسبة.
+          أدِر أسعار الجرام الخام والمصنعيات — يُحسَب السعر الأساسي تلقائياً ويُعرض في الحاسبة.
         </p>
       </div>
 
@@ -89,30 +86,47 @@ export default function Dashboard() {
           </button>
         </div>
 
-        {/* Feedback */}
         {message && (
           <div className={message.ok ? "success-text" : "error-text"} style={{ marginBottom: "1.25rem" }}>
             {message.text}
           </div>
         )}
 
-        {/* Gram price */}
-        <div style={{ background: "var(--gold-pale)", border: "1.5px solid var(--border-strong)", borderRadius: "var(--radius-md)", padding: "1.25rem", marginBottom: "2rem", maxWidth: 360 }}>
-          <div className="input-group" style={{ marginBottom: 0 }}>
-            <label>🏅 سعر الجرام الخام — عيار 24 (ج.م)</label>
-            <input
-              type="number"
-              value={data.gramPrice}
-              onChange={(e) => updateGramPrice(e.target.value)}
-            />
+        {/* Gram prices — two separate inputs */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "2rem" }}>
+          {/* 24K */}
+          <div style={{ background: "var(--gold-pale)", border: "1.5px solid var(--border-strong)", borderRadius: "var(--radius-md)", padding: "1.25rem" }}>
+            <div className="input-group" style={{ marginBottom: 0 }}>
+              <label>🏅 سعر الجرام الخام — عيار 24 (ج.م)</label>
+              <input
+                type="number"
+                value={data.gramPrice24}
+                onChange={(e) => setData({ ...data, gramPrice24: Number(e.target.value) })}
+              />
+            </div>
+            <p style={{ fontSize: "0.78rem", marginTop: "0.5rem" }}>
+              يُطبَّق على السبائك (1 جم → 250 جم)
+            </p>
           </div>
-          <p style={{ fontSize: "0.78rem", marginTop: "0.5rem" }}>
-            * تعديل هذا السعر يُحدّث جميع الحسابات فوراً.
-          </p>
+
+          {/* 21K */}
+          <div style={{ background: "var(--blue-bg)", border: "1.5px solid #9ab8e0", borderRadius: "var(--radius-md)", padding: "1.25rem" }}>
+            <div className="input-group" style={{ marginBottom: 0 }}>
+              <label>🥇 سعر الجرام الخام — عيار 21 (ج.م)</label>
+              <input
+                type="number"
+                value={data.gramPrice21}
+                onChange={(e) => setData({ ...data, gramPrice21: Number(e.target.value) })}
+              />
+            </div>
+            <p style={{ fontSize: "0.78rem", marginTop: "0.5rem" }}>
+              يُطبَّق على العملات (ربع · نصف · جنيه)
+            </p>
+          </div>
         </div>
 
-        {/* Bars table */}
-        <h3 style={{ marginBottom: "1rem" }}>المصنعيات التفصيلية (جنيه مصري / لكل جرام)</h3>
+        {/* Workmanship table */}
+        <h3 style={{ marginBottom: "1rem" }}>المصنعيات التفصيلية (ج.م / لكل جرام)</h3>
         <div style={{ overflowX: "auto" }}>
           <table className="dashboard-table">
             <thead>

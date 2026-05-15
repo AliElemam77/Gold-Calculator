@@ -1,62 +1,256 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
-type GoldBar = {
+/* ─── Types ──────────────────────────────────────────────────────── */
+type SKU = {
   id: string;
   label: string;
   grams: number;
   karat: number;
-  maxQty: number;
   fees: { MB: number; GE: number; BTC: number };
 };
 
 type PricesData = {
-  gramPrice: number;
-  bars: GoldBar[];
+  gramPrice24: number;
+  gramPrice21: number;
+  bars: SKU[];
 };
 
-type Chosen = {
-  idx: string;
-  item: GoldBar;
+type LineItem = {
+  sku: SKU;
   qty: number;
-  unitPrice: number;
-  feePerG: number;
+  basePrice: number;   // grams × goldPricePerGram  (no fee)
+  feePerGram: number;  // avg(MB, GE, BTC)
+  feeTotal: number;    // grams × feePerGram × qty
+  unitFee: number;     // grams × feePerGram (single unit)
 };
 
 type Combo = {
-  chosen: Chosen[];
-  remaining: number;
-  totalSpent: number;
-  totalGrams: number;
+  items: LineItem[];
+  totalBase: number;   // sum of base prices
+  totalFees: number;   // sum of all fees
+  remaining: number;   // budget − totalBase
+  pieces: number;      // total physical pieces
 };
 
-type UpgradeSuggestion = {
-  bar: GoldBar;
-  unitPrice: number;
-  shortfall: number;
-  newTotal: number;
-  totalGrams: number;
-  avgF: number;
-};
-
-function avgFee(fees: { MB: number; GE: number; BTC: number }) {
+/* ─── Helpers ────────────────────────────────────────────────────── */
+function avgFee(fees: { MB: number; GE: number; BTC: number }): number {
   return (fees.MB + fees.GE + fees.BTC) / 3;
 }
 
-function piecePrice(item: GoldBar, p21: number, p24: number) {
-  const base = item.karat === 21 ? p21 : p24;
-  return Math.round((base + avgFee(item.fees)) * item.grams);
+function basePrice(sku: SKU, p21: number, p24: number): number {
+  const gpg = sku.karat === 21 ? p21 : p24;
+  return gpg * sku.grams;
 }
 
-function egpFmt(n: number) {
+function egp(n: number): string {
   return Math.round(n).toLocaleString("ar-EG") + " ج.م";
 }
 
+/* ─── DFS "Minimum Pieces" Engine ───────────────────────────────── */
+const MAX_REMAINING = 5_000;
+const MAX_COMBOS    = 20; // safety cap on results
+
+function dfsSearch(
+  skus: SKU[],
+  budget: number,
+  p21: number,
+  p24: number
+): Combo[] {
+  // Pre-compute base prices; sort skus descending by base price (largest first)
+  const priced = skus
+    .map((s) => ({ sku: s, base: basePrice(s, p21, p24) }))
+    .filter((s) => s.base <= budget)
+    .sort((a, b) => b.base - a.base);
+
+  if (priced.length === 0) return [];
+
+  const cheapest  = priced[priced.length - 1].base;
+  const mostExp   = priced[0].base;
+
+  const results: Combo[] = [];
+
+  function buildCombo(
+    skuIdx: number,
+    remaining: number,
+    slotsFilled: number,
+    totalSlots: number,
+    chosen: { skuIdx: number; qty: number }[]
+  ) {
+    if (results.length >= MAX_COMBOS) return;
+
+    const slotsLeft = totalSlots - slotsFilled;
+
+    // Pruning: can we still possibly qualify?
+    if (slotsLeft === 0) {
+      // Leaf node — check validity
+      if (remaining <= MAX_REMAINING) {
+        // Build LineItem[]
+        const items: LineItem[] = chosen
+          .filter((c) => c.qty > 0)
+          .map((c) => {
+            const { sku } = priced[c.skuIdx];
+            const fpg = avgFee(sku.fees);
+            const bp  = basePrice(sku, p21, p24);
+            return {
+              sku,
+              qty: c.qty,
+              basePrice: bp,
+              feePerGram: fpg,
+              feeTotal: fpg * sku.grams * c.qty,
+              unitFee: fpg * sku.grams,
+            };
+          });
+        const totalBase  = items.reduce((s, i) => s + i.basePrice * i.qty, 0);
+        const totalFees  = items.reduce((s, i) => s + i.feeTotal, 0);
+        results.push({
+          items,
+          totalBase,
+          totalFees,
+          remaining: budget - totalBase,
+          pieces: totalSlots,
+        });
+      }
+      return;
+    }
+
+    // Prune: even filling remaining slots with cheapest SKU overshoots?
+    if (remaining - slotsLeft * cheapest < -0.01) return;
+    // Prune: even filling remaining slots with most expensive SKU can't cover budget−5000?
+    if (remaining - slotsLeft * mostExp > MAX_REMAINING) return;
+
+    // No more skus to try
+    if (skuIdx >= priced.length) return;
+
+    const { base } = priced[skuIdx];
+    const maxQty = Math.min(slotsLeft, Math.floor(remaining / base));
+
+    for (let q = maxQty; q >= 0; q--) {
+      buildCombo(
+        skuIdx + 1,
+        remaining - q * base,
+        slotsFilled + q,
+        totalSlots,
+        [...chosen, { skuIdx, qty: q }]
+      );
+      if (results.length >= MAX_COMBOS) return;
+    }
+  }
+
+  // Try N = 1, 2, 3, … until we get at least one valid combo
+  for (let N = 1; N <= 50; N++) {
+    buildCombo(0, budget, 0, N, []);
+    if (results.length > 0) break;
+  }
+
+  // Sort: least remaining first (best budget coverage)
+  results.sort((a, b) => a.remaining - b.remaining);
+  return results;
+}
+
+/* ─── Component: Result Card ─────────────────────────────────────── */
+function ComboCard({
+  combo,
+  index,
+  budget,
+}: {
+  combo: Combo;
+  index: number;
+  budget: number;
+}) {
+  const [showFees, setShowFees] = useState(false);
+
+  const grandTotal   = combo.totalBase + (showFees ? combo.totalFees : 0);
+  const newRemaining = budget - grandTotal;
+
+  return (
+    <div className={`combo-card animate-fade-in combo-rank-${Math.min(index + 1, 3)}`}>
+      {/* Card header */}
+      <div className="combo-card-header">
+        <div className="combo-meta">
+          <span className="combo-index">#{index + 1}</span>
+          <span className="combo-piece-badge">
+            {combo.pieces} {combo.pieces === 1 ? "قطعة" : "قطع"}
+          </span>
+        </div>
+        <button
+          className={`fee-toggle-btn ${showFees ? "fee-toggle-on" : ""}`}
+          onClick={() => setShowFees((v) => !v)}
+        >
+          {showFees ? "↩ إخفاء المصنعية" : "＋ أضف المصنعية"}
+        </button>
+      </div>
+
+      {/* Line items */}
+      <div className="combo-items">
+        {combo.items.map((item, j) => {
+          const baseLine = item.basePrice * item.qty;
+          const feeLine  = item.unitFee  * item.qty;
+          const total    = showFees ? baseLine + feeLine : baseLine;
+
+          return (
+            <div key={j} className="combo-line-item">
+              <div className="combo-line-left">
+                <span className="combo-line-name">
+                  {item.qty > 1 ? `${item.qty} × ` : ""}
+                  {item.sku.label}
+                </span>
+                <span className={`combo-karat-tag karat-tag-${item.sku.karat}`}>
+                  عيار {item.sku.karat}
+                </span>
+                {showFees && (
+                  <span className="combo-fee-note">
+                    + مصنعية {egp(feeLine)}
+                  </span>
+                )}
+              </div>
+              <div className="combo-line-right">
+                {egp(total)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Fee summary row (visible only when fees on) */}
+      {showFees && (
+        <div className="combo-fee-summary">
+          <span>إجمالي المصنعيات</span>
+          <span className="fee-total-val">{egp(combo.totalFees)}</span>
+        </div>
+      )}
+
+      {/* Footer summary */}
+      <div className="combo-footer">
+        <div className="combo-stat">
+          <div className="combo-stat-label">المُستغَل (خام)</div>
+          <div className="combo-stat-val">{egp(combo.totalBase)}</div>
+        </div>
+        {showFees && (
+          <div className="combo-stat">
+            <div className="combo-stat-label">الإجمالي شامل المصنعية</div>
+            <div className="combo-stat-val fee-grand">{egp(grandTotal)}</div>
+          </div>
+        )}
+        <div className="combo-stat">
+          <div className="combo-stat-label">المتبقي {showFees ? "(بعد المصنعية)" : ""}</div>
+          <div className={`combo-stat-val ${newRemaining >= 0 ? "remaining-ok" : "remaining-warn"}`}>
+            {egp(Math.max(0, newRemaining))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main Page ──────────────────────────────────────────────────── */
 export default function Calculator() {
-  const [budget, setBudget] = useState<number | "">("");
-  const [data, setData] = useState<PricesData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [budget, setBudget]     = useState<number | "">("");
+  const [data, setData]         = useState<PricesData | null>(null);
+  const [loading, setLoading]   = useState(true);
+  const [computing, setComputing] = useState(false);
+  const [combos, setCombos]     = useState<Combo[]>([]);
   const [showBars, setShowBars] = useState(false);
 
   useEffect(() => {
@@ -65,6 +259,20 @@ export default function Calculator() {
       .then((d: PricesData) => { setData(d); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
+
+  const runEngine = useCallback(() => {
+    if (!data || !budget || Number(budget) <= 0) {
+      setCombos([]);
+      return;
+    }
+    setComputing(true);
+    // Run in next tick so UI can show computing state
+    setTimeout(() => {
+      const results = dfsSearch(data.bars, Number(budget), data.gramPrice21, data.gramPrice24);
+      setCombos(results);
+      setComputing(false);
+    }, 10);
+  }, [data, budget]);
 
   if (loading) {
     return (
@@ -75,338 +283,173 @@ export default function Calculator() {
     );
   }
 
-  if (!data) return <div className="empty-state"><p>فشل تحميل البيانات.</p></div>;
+  if (!data) {
+    return (
+      <div className="empty-state">
+        <p>فشل تحميل البيانات.</p>
+      </div>
+    );
+  }
 
-  const b = Number(budget);
-  const p24 = data.gramPrice;
-  const p21 = p24 * (21 / 24);
+  const b   = Number(budget);
+  const p24 = data.gramPrice24;
+  const p21 = data.gramPrice21;
 
-  // All bar prices
-  const allPieces = data.bars.map((bar) => ({
-    idx: bar.id,
-    item: bar,
-    unitPrice: piecePrice(bar, p21, p24),
-    feePerG: avgFee(bar.fees),
+  // SKU base prices for reference panel
+  const skuRows = data.bars.map((s) => ({
+    sku: s,
+    bp: basePrice(s, p21, p24),
+    fpg: avgFee(s.fees),
   }));
 
-  const affordablePieces = allPieces.filter((p) => p.unitPrice <= b);
-
-  /* ── Greedy engine ─────────────────────────────────────────── */
-  const greedy = (
-    sortFn: (a: typeof allPieces[0], x: typeof allPieces[0]) => number,
-    maxQtyFn?: () => number
-  ): Combo | null => {
-    let rem = b;
-    const chosen: Chosen[] = [];
-    for (const p of [...affordablePieces].sort(sortFn)) {
-      const cap = maxQtyFn ? maxQtyFn() : p.item.maxQty;
-      const qty = Math.min(Math.floor(rem / p.unitPrice), cap);
-      if (qty > 0) { chosen.push({ ...p, qty }); rem -= qty * p.unitPrice; }
-    }
-    if (!chosen.length) return null;
-    return {
-      chosen,
-      remaining: rem,
-      totalSpent: b - rem,
-      totalGrams: chosen.reduce((s, c) => s + c.item.grams * c.qty, 0),
-    };
-  };
-
-  const topCombos: Combo[] = [];
-  if (b > 0) {
-    const opts = [
-      greedy((a, x) => a.feePerG - x.feePerG),
-      greedy((a, x) => x.item.grams - a.item.grams),
-      greedy((a, x) => x.item.grams - a.item.grams, () => 1),
-    ];
-    const seen = new Set<string>();
-    for (const o of opts) {
-      if (!o) continue;
-      const k = o.chosen.map((c) => `${c.idx}x${c.qty}`).sort().join("|");
-      if (!seen.has(k)) { seen.add(k); topCombos.push(o); }
-    }
-  }
-
-  /* ── "زود كذا عشان تشتري كذا" – upgrade suggestions ──────── */
-  // Case A: budget too low for anything → show cheapest items + shortfall
-  const budgetTooLow = b > 0 && affordablePieces.length === 0;
-
-  // Case B: budget OK, but there are BETTER deals just out of reach (shortfall ≤ 30% of budget)
-  const upgradeSuggestions: UpgradeSuggestion[] = [];
-  if (b > 0 && !budgetTooLow) {
-    const unaffordable = allPieces.filter((p) => p.unitPrice > b);
-    for (const p of unaffordable) {
-      const shortfall = p.unitPrice - b;
-      if (shortfall <= b * 0.30) { // only suggest if within 30% more
-        upgradeSuggestions.push({
-          bar: p.item,
-          unitPrice: p.unitPrice,
-          shortfall,
-          newTotal: p.unitPrice,
-          totalGrams: p.item.grams,
-          avgF: avgFee(p.item.fees),
-        });
-      }
-    }
-    // sort by smallest shortfall first, cap at 3
-    upgradeSuggestions.sort((a, b) => a.shortfall - b.shortfall);
-    upgradeSuggestions.splice(3);
-  }
-
-  // For budgetTooLow: cheapest 3 items sorted by price
-  const cheapestItems = [...allPieces]
-    .sort((a, b) => a.unitPrice - b.unitPrice)
-    .slice(0, 3);
-
-  const RANKS = [
-    { label: "الأفضل قيمة",   cls: "rank-1", badge: "badge-gold",   title: "أعلى عائد وأقل مصنعية" },
-    { label: "سبائك كبيرة",   cls: "rank-2", badge: "badge-blue",   title: "أكبر كميات الذهب الممكنة" },
-    { label: "محفظة متنوعة",  cls: "rank-3", badge: "badge-purple", title: "توزيع متوازن وتنوع القطع" },
-  ];
+  const noResult = b > 0 && !computing && combos.length === 0;
+  const budgetTooLow = b > 0 && skuRows.every((r) => r.bp > b);
 
   return (
     <div className="animate-fade-in">
-      {/* ── Hero ─────────────────────────────────────────────────── */}
+      {/* ── Hero ──────────────────────────────────────────────── */}
       <div className="page-hero">
         <h1>حاسبة استثمار الذهب 🪙</h1>
-        <p className="subtitle">أدخل ميزانيتك واحصل على أفضل توصيات استثمارية فوريّة ومخصّصة</p>
+        <p className="subtitle">
+          أدخل ميزانيتك واضغط احسب — سنجد أقل عدد قطع يغطي ميزانيتك بفارق ≤ 5,000 ج.م
+        </p>
         <div className="live-price-badge">
           <span className="dot" />
-          سعر عيار 24 الحالي: {egpFmt(p24)} | عيار 21: {egpFmt(Math.round(p21))}
+          عيار 24: {egp(p24)} / جرام &nbsp;|&nbsp; عيار 21: {egp(p21)} / جرام
         </div>
       </div>
 
-      {/* ── Disclaimer ───────────────────────────────────────────── */}
+      {/* ── Disclaimer ────────────────────────────────────────── */}
       <div className="disclaimer-banner animate-fade-in">
         <span className="disclaimer-icon">⚠️</span>
         <span>
-          <strong>تنبيه مهم:</strong> أسعار الذهب تتغيّر بشكل شبه يومي بناءً على أسعار السوق العالمية.
-          يُنصح بمراجعة لوحة الإدارة وتحديث السعر قبل الاستخدام لضمان دقة الحسابات.
+          <strong>تنبيه:</strong> أسعار الذهب تتغيّر يومياً. تأكد من تحديث السعر في
+          لوحة التحكم قبل الاستخدام. الأسعار المعروضة بدون مصنعية — يمكنك إضافتها
+          من كل كارت بشكل مستقل.
         </span>
       </div>
 
-      {/* ── Bars Reference (toggle) ───────────────────────────────── */}
+      {/* ── SKU Reference (collapsible) ───────────────────────── */}
       <div className="bars-section animate-fade-in">
         <button className="bars-toggle-btn" onClick={() => setShowBars(!showBars)}>
           <span>{showBars ? "▲" : "▼"}</span>
-          {showBars ? "إخفاء قائمة السبائك والمصنعيات" : "عرض قائمة جميع السبائك ومصنعياتها"}
+          {showBars ? "إخفاء قائمة المنتجات والمصنعيات" : "عرض جميع المنتجات والمصنعيات"}
         </button>
-
         {showBars && (
           <div className="bars-grid animate-fade-in">
-            {data.bars.map((bar) => {
-              const price = piecePrice(bar, p21, p24);
-              const af = avgFee(bar.fees);
-              return (
-                <div key={bar.id} className="bar-card">
-                  <div className="bar-card-header">
-                    <span className="bar-name">{bar.label}</span>
-                    <span className={`bar-karat-badge ${bar.karat === 21 ? "karat-21" : "karat-24"}`}>
-                      عيار {bar.karat}
-                    </span>
-                  </div>
-                  <div className="bar-price">{egpFmt(price)}</div>
-                  <div className="bar-details">
-                    <span>{bar.grams} جرام</span>
-                    <span>·</span>
-                    <span>مصنعية MB: {bar.fees.MB}</span>
-                    <span>·</span>
-                    <span>GE: {bar.fees.GE}</span>
-                    <span>·</span>
-                    <span>BTC: {bar.fees.BTC}</span>
-                  </div>
-                  <div className="bar-avg-fee">متوسط المصنعية: <strong>{Math.round(af)} ج.م/جرام</strong></div>
+            {skuRows.map(({ sku, bp, fpg }) => (
+              <div key={sku.id} className="bar-card">
+                <div className="bar-card-header">
+                  <span className="bar-name">{sku.label}</span>
+                  <span className={`bar-karat-badge ${sku.karat === 21 ? "karat-21" : "karat-24"}`}>
+                    عيار {sku.karat}
+                  </span>
                 </div>
-              );
-            })}
+                <div className="bar-price">{egp(bp)}</div>
+                <div className="bar-details">
+                  <span>{sku.grams} جرام</span>
+                  <span>·</span>
+                  <span>MB: {sku.fees.MB}</span>
+                  <span>·</span>
+                  <span>GE: {sku.fees.GE}</span>
+                  <span>·</span>
+                  <span>BTC: {sku.fees.BTC}</span>
+                </div>
+                <div className="bar-avg-fee">
+                  متوسط المصنعية: <strong>{Math.round(fpg)} ج.م/جرام</strong>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* ── Main Grid ────────────────────────────────────────────── */}
-      <div className="grid-2">
-
-        {/* LEFT: Budget input */}
-        <div className="glass-panel animate-fade-in">
-          <h2>ميزانيتك</h2>
-
-          <div className="budget-input-wrapper">
-            <label htmlFor="budget">أدخل المبلغ المتاح</label>
-            <div className="budget-input-inner">
-              <input
-                type="number"
-                id="budget"
-                placeholder="مثال: 100,000"
-                value={budget}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setBudget(v > 0 ? v : "");
-                }}
-              />
-              <span className="currency-tag">ج.م</span>
-            </div>
-          </div>
-
-          {/* quick price reference */}
-          <div className="price-list">
-            <p className="price-list-title">الأسعار الحالية شاملة متوسط المصنعية</p>
-            <div className="stat-row">
-              <span className="stat-label">جرام عيار 24 (خام)</span>
-              <span className="stat-value gold">{egpFmt(p24)}</span>
-            </div>
-            <div className="stat-row">
-              <span className="stat-label">جرام عيار 21 (خام)</span>
-              <span className="stat-value gold">{egpFmt(Math.round(p21))}</span>
-            </div>
-            {data.bars.map((bar) => (
-              <div className="stat-row" key={bar.id}>
-                <span className="stat-label">{bar.label}</span>
-                <span className="stat-value">{egpFmt(piecePrice(bar, p21, p24))}</span>
-              </div>
-            ))}
+      {/* ── Input + Calculate ─────────────────────────────────── */}
+      <div className="calc-input-row animate-fade-in">
+        <div className="budget-input-wrapper" style={{ marginBottom: 0, flex: 1 }}>
+          <label htmlFor="budget">أدخل ميزانيتك (ج.م)</label>
+          <div className="budget-input-inner">
+            <input
+              type="number"
+              id="budget"
+              placeholder="مثال: 50,000"
+              value={budget}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                setBudget(v > 0 ? v : "");
+                setCombos([]);
+              }}
+              onKeyDown={(e) => e.key === "Enter" && runEngine()}
+            />
+            <span className="currency-tag">ج.م</span>
           </div>
         </div>
+        <button
+          className="primary-btn calc-btn"
+          onClick={runEngine}
+          disabled={!budget || Number(budget) <= 0 || computing}
+        >
+          {computing ? "⏳ جاري الحساب…" : "🔍 احسب"}
+        </button>
+      </div>
 
-        {/* RIGHT: Results */}
-        <div className="glass-panel animate-fade-in">
+      {/* ── Results area ──────────────────────────────────────── */}
+      <div className="results-area">
 
-          {/* ── No budget entered ─────────────────────────────── */}
-          {!b || b <= 0 ? (
-            <>
-              <h2>التوصيات المقترحة</h2>
-              <div className="empty-state">
-                <div className="empty-icon">💡</div>
-                <p>أدخل ميزانيتك على اليسار لتظهر توصيات مخصّصة لك هنا.</p>
+        {/* No budget yet */}
+        {!b || b <= 0 ? (
+          <div className="empty-state animate-fade-in">
+            <div className="empty-icon">💡</div>
+            <p>أدخل ميزانيتك واضغط «احسب» لتظهر توصيات مخصّصة لك هنا.</p>
+          </div>
+        ) : budgetTooLow ? (
+          /* Budget can't afford any single SKU */
+          <div className="no-result-box animate-fade-in">
+            <div className="no-result-icon">💸</div>
+            <h3>الميزانية غير كافية</h3>
+            <p>
+              مبلغ <strong>{egp(b)}</strong> لا يكفي لشراء أي قطعة متاحة.
+              أرخص قطعة حالياً هي{" "}
+              <strong>
+                {(() => {
+                  const cheapest = skuRows.slice().sort((a, z) => a.bp - z.bp)[0];
+                  return `${cheapest.sku.label} بسعر ${egp(cheapest.bp)}`;
+                })()}
+              </strong>.
+            </p>
+          </div>
+        ) : computing ? (
+          <div className="empty-state animate-fade-in">
+            <div className="empty-icon">⚙️</div>
+            <p>جاري البحث عن أفضل تشكيلة…</p>
+          </div>
+        ) : noResult && !budgetTooLow ? (
+          /* Budget is sufficient for individual SKUs but no combo hits the ≤5000 gap */
+          <div className="no-result-box animate-fade-in">
+            <div className="no-result-icon">🔎</div>
+            <h3>لا توجد تشكيلة مناسبة</h3>
+            <p>
+              لم نتمكن من إيجاد تشكيلة تترك ≤ 5,000 ج.م متبقية من ميزانيتك.
+              جرّب تعديل الميزانية أو مراجعة الأسعار في لوحة التحكم.
+            </p>
+          </div>
+        ) : combos.length > 0 ? (
+          <>
+            <div className="results-header animate-fade-in">
+              <div className="results-title">
+                🏆 أفضل تشكيلات الشراء
               </div>
-            </>
-          ) : budgetTooLow ? (
-            /* ── Budget too low: suggest cheapest items ───────── */
-            <>
-              <h2>💸 الميزانية غير كافية</h2>
-              <p style={{ marginBottom: "1.25rem" }}>
-                مبلغ <strong style={{ color: "var(--gold)" }}>{egpFmt(b)}</strong> غير كافٍ لشراء أي وحدة متاحة حالياً.
-                لكن لا تقلق — إليك أرخص 3 خيارات وكم تحتاج للوصول إليها:
-              </p>
-              <div className="upgrade-list">
-                {cheapestItems.map((p, i) => {
-                  const shortfall = p.unitPrice - b;
-                  return (
-                    <div key={i} className="upgrade-card shortfall-card animate-fade-in">
-                      <div className="upgrade-header">
-                        <span className="upgrade-rank">#{i + 1}</span>
-                        <span className="upgrade-name">{p.item.label} — عيار {p.item.karat}</span>
-                      </div>
-                      <div className="upgrade-body">
-                        <div className="upgrade-row">
-                          <span>سعر القطعة</span>
-                          <strong>{egpFmt(p.unitPrice)}</strong>
-                        </div>
-                        <div className="upgrade-row">
-                          <span>ميزانيتك الحالية</span>
-                          <strong>{egpFmt(b)}</strong>
-                        </div>
-                        <div className="upgrade-row need">
-                          <span>💰 تحتاج أن تزيد</span>
-                          <strong className="shortfall-amount">+ {egpFmt(shortfall)}</strong>
-                        </div>
-                        <div className="upgrade-perks">
-                          <span>✅ {p.item.grams} جرام</span>
-                          <span>✅ متوسط مصنعية {Math.round(p.feePerG)} ج.م</span>
-                          <span>✅ عيار {p.item.karat}</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="results-sub">
+                {combos.length} نتيجة — مرتبة حسب أقل مبلغ متبقٍ · تترك ≤ 5,000 ج.م فارقاً
               </div>
-            </>
-          ) : (
-            /* ── Budget OK: show recommendations + upgrade hints ─ */
-            <>
-              <h2>التوصيات المقترحة</h2>
-              <div className="rec-panel">
-                {topCombos.map((combo, i) => {
-                  const rank = RANKS[i];
-                  return (
-                    <div key={i} className={`recommendation-card ${rank.cls} animate-fade-in`}>
-                      <div className="card-header">
-                        <span className={`rank-badge ${rank.badge}`}>{rank.label}</span>
-                        <span className="card-title">{rank.title}</span>
-                      </div>
-                      <table className="items-table">
-                        <tbody>
-                          {combo.chosen.map((c, j) => (
-                            <tr key={j}>
-                              <td>
-                                <div className="item-name">
-                                  {c.qty > 1 ? `${c.qty} × ` : ""}{c.item.label}
-                                </div>
-                                <div className="item-sub">
-                                  عيار {c.item.karat} · مصنعية {Math.round(avgFee(c.item.fees))} ج.م/جرام
-                                </div>
-                              </td>
-                              <td className="item-price">{egpFmt(c.unitPrice * c.qty)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      <div className="card-summary">
-                        <div className="summary-item">
-                          <div className="summary-label">المُستغَل</div>
-                          <div className="summary-val">{egpFmt(combo.totalSpent)}</div>
-                        </div>
-                        <div className="summary-item">
-                          <div className="summary-label">المتبقي</div>
-                          <div className="summary-val green">{egpFmt(combo.remaining)}</div>
-                        </div>
-                        <div className="summary-item">
-                          <div className="summary-label">الوزن</div>
-                          <div className="summary-val gold">{parseFloat(combo.totalGrams.toFixed(2))} جم</div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* ── Upgrade suggestions (deals just out of reach) ── */}
-              {upgradeSuggestions.length > 0 && (
-                <div className="upgrade-section animate-fade-in">
-                  <div className="upgrade-section-title">
-                    🚀 صفقات تستحق التفكير — أنت قريب جداً!
-                  </div>
-                  <p className="upgrade-section-sub">
-                    بزيادة بسيطة في ميزانيتك يمكنك الحصول على هذه المنتجات الأفضل:
-                  </p>
-                  <div className="upgrade-list">
-                    {upgradeSuggestions.map((s, i) => (
-                      <div key={i} className="upgrade-card animate-fade-in">
-                        <div className="upgrade-header">
-                          <span className="upgrade-name">🏅 {s.bar.label} — عيار {s.bar.karat}</span>
-                        </div>
-                        <div className="upgrade-body">
-                          <div className="upgrade-row">
-                            <span>سعر القطعة</span>
-                            <strong>{egpFmt(s.unitPrice)}</strong>
-                          </div>
-                          <div className="upgrade-row need">
-                            <span>💰 تحتاج زيادة</span>
-                            <strong className="shortfall-amount">+ {egpFmt(s.shortfall)}</strong>
-                          </div>
-                          <div className="upgrade-perks">
-                            <span>✅ {s.totalGrams} جرام ذهب خالص</span>
-                            <span>✅ متوسط مصنعية {Math.round(s.avgF)} ج.م/جرام</span>
-                            <span>✅ عيار {s.bar.karat} — استثمار آمن</span>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            </div>
+            <div className="combos-grid">
+              {combos.map((c, i) => (
+                <ComboCard key={i} combo={c} index={i} budget={b} />
+              ))}
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );
