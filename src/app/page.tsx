@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 
 /* ─── Types ──────────────────────────────────────────────────────── */
 type SKU = {
@@ -260,18 +260,17 @@ export default function Calculator() {
       .catch(() => setLoading(false));
   }, []);
 
-  const runEngine = useCallback(() => {
-    if (!data || !budget || Number(budget) <= 0) {
-      setCombos([]);
-      return;
-    }
+  // Debounced auto-search: fires 300 ms after the user stops typing.
+  // Only runs when budget is a positive number — clearing is handled in onChange.
+  useEffect(() => {
+    if (!data || !budget || Number(budget) <= 0) return;
     setComputing(true);
-    // Run in next tick so UI can show computing state
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       const results = dfsSearch(data.bars, Number(budget), data.gramPrice21, data.gramPrice24);
       setCombos(results);
       setComputing(false);
-    }, 10);
+    }, 300);
+    return () => clearTimeout(timer);
   }, [data, budget]);
 
   if (loading) {
@@ -364,33 +363,28 @@ export default function Calculator() {
         )}
       </div>
 
-      {/* ── Input + Calculate ─────────────────────────────────── */}
-      <div className="calc-input-row animate-fade-in">
-        <div className="budget-input-wrapper" style={{ marginBottom: 0, flex: 1 }}>
-          <label htmlFor="budget">أدخل ميزانيتك (ج.م)</label>
-          <div className="budget-input-inner">
-            <input
-              type="number"
-              id="budget"
-              placeholder="مثال: 50,000"
-              value={budget}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setBudget(v > 0 ? v : "");
+      {/* ── Input ─────────────────────────────────────────────── */}
+      <div className="budget-input-wrapper animate-fade-in">
+        <label htmlFor="budget">أدخل ميزانيتك (ج.م)</label>
+        <div className="budget-input-inner">
+          <input
+            type="number"
+            id="budget"
+            placeholder="مثال: 50,000"
+            value={budget}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (v > 0) {
+                setBudget(v);
+              } else {
+                setBudget("");
                 setCombos([]);
-              }}
-              onKeyDown={(e) => e.key === "Enter" && runEngine()}
-            />
-            <span className="currency-tag">ج.م</span>
-          </div>
+                setComputing(false);
+              }
+            }}
+          />
+          <span className="currency-tag">ج.م</span>
         </div>
-        <button
-          className="primary-btn calc-btn"
-          onClick={runEngine}
-          disabled={!budget || Number(budget) <= 0 || computing}
-        >
-          {computing ? "⏳ جاري الحساب…" : "🔍 احسب"}
-        </button>
       </div>
 
       {/* ── Results area ──────────────────────────────────────── */}
